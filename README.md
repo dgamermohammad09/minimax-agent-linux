@@ -3,7 +3,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Linux-blue" alt="Platform">
   <img src="https://img.shields.io/badge/Architecture-amd64-orange" alt="Architecture">
-  <img src="https://img.shields.io/badge/Version-3.0.52-green" alt="Version">
+  <img src="https://img.shields.io/badge/Version-3.0.53-green" alt="Version">
   <img src="https://img.shields.io/badge/Package-deb-red" alt="Package">
 </p>
 
@@ -13,17 +13,17 @@
 
 **Direct Download:** Click on the `.deb` file in the `releases/` folder above, or use:
 ```bash
-wget https://github.com/unn-Known1/minimax-agent-linux/releases/download/v3.0.52/minimax-agent_3.0.52_amd64.deb
+wget https://github.com/unn-Known1/minimax-agent-linux/releases/download/v3.0.53/minimax-agent_3.0.53_amd64.deb
 ```
 
 ## Installation
 
 ```bash
 # Download the package
-wget https://github.com/unn-Known1/minimax-agent-linux/releases/download/v3.0.52/minimax-agent_3.0.52_amd64.deb
+wget https://github.com/unn-Known1/minimax-agent-linux/releases/download/v3.0.53/minimax-agent_3.0.53_amd64.deb
 
 # Install
-sudo dpkg -i minimax-agent_3.0.52_amd64.deb
+sudo dpkg -i minimax-agent_3.0.53_amd64.deb
 
 # Fix dependencies if needed
 sudo apt --fix-broken install
@@ -144,7 +144,7 @@ This is an unofficial port. MiniMax is not affiliated with this project. The ori
 
 ---
 
-*Last updated: June 2026*
+*Last updated: July 2026*
 ## Troubleshooting
 
 ### Backend service fails to start after login

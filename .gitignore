@@ -5,6 +5,9 @@
 output/
 *.log
 
+# MiMoCode session data
+.mimocode/
+
 # OS files
 .DS_Store
 Thumbs.db
