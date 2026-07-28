@@ -11,14 +11,83 @@ on:
         description: 'Direct URL to Windows .exe (optional, auto-detected if not provided)'
         required: false
         type: string
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 6 AM UTC
 
 permissions:
   contents: write
   packages: write
+  issues: write
 
 jobs:
+  check-release:
+    name: Check for New Windows Release
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.check.outputs.new_version }}
+      exe_url: ${{ steps.check.outputs.exe_url }}
+      should_build: ${{ steps.check.outputs.should_build }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get current version
+        id: current
+        run: |
+          CURRENT_VERSION=$(grep 'VERSION=' build.sh | head -1 | cut -d'"' -f2)
+          echo "Current version in repo: $CURRENT_VERSION"
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check for new version on CDN
+        id: check
+        run: |
+          CURRENT_VERSION="${{ steps.current.outputs.current_version }}"
+          echo "Checking for versions newer than $CURRENT_VERSION..."
+          
+          # Parse current version
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          
+          # Check next 20 patch versions
+          LATEST_VERSION=""
+          LATEST_URL=""
+          
+          for i in $(seq 1 20); do
+            TEST_PATCH=$((PATCH + i))
+            TEST_VERSION="${MAJOR}.${MINOR}.${TEST_PATCH}"
+            TEST_URL="https://file.cdn.minimax.io/public/minimax-agent-prod/release/MiniMax%20Code%20Setup%20${TEST_VERSION}.exe"
+            
+            echo "Checking $TEST_VERSION..."
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --head "$TEST_URL" --max-time 10 || echo "000")
+            
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Found new version: $TEST_VERSION"
+              LATEST_VERSION=$TEST_VERSION
+              LATEST_URL=$TEST_URL
+            elif [ "$HTTP_CODE" = "404" ]; then
+              echo "Version $TEST_VERSION not found (404)"
+            else
+              echo "Version $TEST_VERSION check failed (HTTP $HTTP_CODE)"
+            fi
+          done
+          
+          if [ -n "$LATEST_VERSION" ]; then
+            echo "New version detected: $LATEST_VERSION"
+            echo "new_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+            echo "exe_url=$LATEST_URL" >> $GITHUB_OUTPUT
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          else
+            echo "No new version found"
+            echo "new_version=" >> $GITHUB_OUTPUT
+            echo "exe_url=" >> $GITHUB_OUTPUT
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          fi
+
   build-deb:
     name: Build .deb Package
+    needs: check-release
+    if: needs.check-release.outputs.should_build == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -43,12 +112,27 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${{ needs.check-release.outputs.new_version }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
       - name: Download Windows release
         run: |
-          VERSION="${{ github.event.inputs.version }}"
-          EXE_URL="${{ github.event.inputs.exe_url }}"
-          if [ -z "$EXE_URL" ]; then
-            EXE_URL="https://file.cdn.minimax.io/public/minimax-agent-prod/release/MiniMax%20Code%20Setup%20${VERSION}.exe"
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            EXE_URL="${{ github.event.inputs.exe_url }}"
+            if [ -z "$EXE_URL" ]; then
+              EXE_URL="https://file.cdn.minimax.io/public/minimax-agent-prod/release/MiniMax%20Code%20Setup%20${VERSION}.exe"
+            fi
+          else
+            EXE_URL="${{ needs.check-release.outputs.exe_url }}"
           fi
           
           mkdir -p /tmp/minimax-extract
@@ -67,7 +151,7 @@ jobs:
 
       - name: Extract NSIS installer
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="${{ steps.version.outputs.version }}"
           cd /tmp/minimax-extract
           mkdir -p extracted
           7z x -oextracted "MiniMax Code Setup ${VERSION}.exe"
@@ -76,7 +160,7 @@ jobs:
 
       - name: Update version references
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="${{ steps.version.outputs.version }}"
           sed -i "s/VERSION=\".*\"/VERSION=\"${VERSION}\"/" build.sh
           sed -i "s/VERSION=\".*\"/VERSION=\"${VERSION}\"/" setup.sh
           sed -i "s/VERSION=\".*\"/VERSION=\"${VERSION}\"/" releases/download.sh
@@ -121,24 +205,24 @@ jobs:
 
       - name: Verify package
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="${{ steps.version.outputs.version }}"
           dpkg-deb -I output/minimax-agent_${VERSION}_amd64.deb
           dpkg-deb -c output/minimax-agent_${VERSION}_amd64.deb | head -20
 
       - name: Copy to releases folder
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="${{ steps.version.outputs.version }}"
           cp output/minimax-agent_${VERSION}_amd64.deb releases/
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:
           name: minimax-agent-deb
-          path: output/minimax-agent_${{ github.event.inputs.version }}_amd64.deb
+          path: output/minimax-agent_${{ steps.version.outputs.version }}_amd64.deb
 
       - name: Commit version changes
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="${{ steps.version.outputs.version }}"
           git add -A
           git commit -m "Release v${VERSION}" || echo "No changes to commit"
           git tag -a "v${VERSION}" -m "Release v${VERSION}" || echo "Tag already exists"
@@ -151,33 +235,38 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ github.event.inputs.version }}
-          name: v${{ github.event.inputs.version }}
-          body: "Release v${{ github.event.inputs.version }} - Updated from Windows ${{ github.event.inputs.version }}"
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          body: "Release v${{ steps.version.outputs.version }} - Updated from Windows ${{ steps.version.outputs.version }}"
           files: |
-            releases/minimax-agent_${{ github.event.inputs.version }}_amd64.deb
+            releases/minimax-agent_${{ steps.version.outputs.version }}_amd64.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   notify-failure:
     name: Create Failure Issue
-    if: failure()
+    needs: [build-deb]
+    if: failure() && (needs.check-release.outputs.should_build == 'true' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
       - name: Create issue for failed build
         uses: actions/github-script@v7
         with:
           script: |
-            const version = "${{ github.event.inputs.version }}";
+            const version = "${{ needs.check-release.outputs.new_version || github.event.inputs.version }}";
             const runUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}";
             const runId = "${{ github.run_id }}";
+            const eventName = "${{ github.event_name }}";
+            
+            let triggerType = 'Scheduled check';
+            if (eventName === 'workflow_dispatch') triggerType = 'Manual dispatch';
             
             const title = `Build failed for MiniMax Agent Linux v${version}`;
             const body = `## Build Failure Report
             
 **Version:** v${version}
 **Workflow Run:** [#${runId}](${runUrl})
-**Triggered by:** Manual dispatch
+**Triggered by:** ${triggerType}
 **Timestamp:** ${new Date().toISOString()}
 
 ### Error Details
