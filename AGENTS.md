@@ -7,6 +7,35 @@ This document outlines the steps to update the Linux build when a new Windows ve
 - **GitHub:** unn-Known1
 - **Email:** ptelgm.yt@gmail.com
 
+## Automated Release (Recommended)
+
+Use GitHub Actions workflow for automated builds:
+
+1. Go to **Actions** → **Release Build** → **Run workflow**
+2. Enter version (e.g., `3.0.54`)
+3. Optionally provide custom EXE URL (auto-detected from CDN if not provided)
+4. Click **Run workflow**
+
+The workflow will:
+- Download Windows .exe from CDN (`https://file.cdn.minimax.io/public/minimax-agent-prod/release/MiniMax%20Code%20Setup%20<VERSION>.exe`)
+- Extract and copy resources
+- Update all version references
+- Build `.deb` package
+- Build Arch Linux package (`.pkg.tar.zst`)
+- Create Git tag and GitHub Release
+- Upload both packages to the release
+- Create GitHub issue if build fails
+
+**Workflow file:** `.github/workflows/release.yml`
+
+**CDN URL pattern:** `https://file.cdn.minimax.io/public/minimax-agent-prod/release/MiniMax%20Code%20Setup%20<VERSION>.exe`
+
+## Manual Release Process (Legacy)
+
+## Manual Release Process (Legacy)
+
+This document outlines the steps to update the Linux build when a new Windows version of MiniMax Agent / MiniMax Code is released.
+
 ## Prerequisites
 
 - Linux system with `dpkg-deb`, `fakeroot`, `npm`, `npx`, and `7z` (p7zip-full) installed
