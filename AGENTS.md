@@ -2,6 +2,11 @@
 
 This document outlines the steps to update the Linux build when a new Windows version of MiniMax Agent / MiniMax Code is released.
 
+## Maintainer
+
+- **GitHub:** unn-Known1
+- **Email:** ptelgm.yt@gmail.com
+
 ## Prerequisites
 
 - Linux system with `dpkg-deb`, `fakeroot`, `npm`, `npx`, and `7z` (p7zip-full) installed
