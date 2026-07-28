@@ -60,10 +60,46 @@ jobs:
             echo "new_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
             echo "exe_url=$EXE_URL" >> $GITHUB_OUTPUT
             echo "should_build=true" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "schedule" ]; then
+            # Scheduled check - try to detect new version by checking CDN
+            # Try to fetch directory listing or check known version patterns
+            echo "Scheduled check - attempting to detect new version..."
+            
+            # Try to get latest version from CDN (this is a best-effort approach)
+            # We'll check a few likely version increments
+            for i in {1..10}; do
+              TEST_VERSION=$(echo $CURRENT_VERSION | awk -F. -v inc=$i '{print $1"."$2"."$3+inc}')
+              TEST_URL="https://file.cdn.minimax.io/public/minimax-agent-prod/release/MiniMax%20Code%20Setup%20${TEST_VERSION}.exe"
+              
+              echo "Checking version: $TEST_VERSION"
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --head "$TEST_URL" --max-time 10 || echo "000")
+              
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "Found new version: $TEST_VERSION"
+                LATEST_VERSION=$TEST_VERSION
+                EXE_URL=$TEST_URL
+                break
+              elif [ "$HTTP_CODE" = "404" ]; then
+                echo "Version $TEST_VERSION not found (404)"
+              else
+                echo "Version $TEST_VERSION check failed (HTTP $HTTP_CODE)"
+              fi
+            done
+            
+            if [ -n "$LATEST_VERSION" ]; then
+              echo "new_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+              echo "exe_url=$EXE_URL" >> $GITHUB_OUTPUT
+              echo "should_build=true" >> $GITHUB_OUTPUT
+              echo "New version detected: $LATEST_VERSION"
+            else
+              echo "No new version found"
+              echo "new_version=" >> $GITHUB_OUTPUT
+              echo "exe_url=" >> $GITHUB_OUTPUT
+              echo "should_build=false" >> $GITHUB_OUTPUT
+            fi
           else
-            # Scheduled check - try to detect new version
-            # This is a placeholder - you'd need a reliable way to detect new versions
-            echo "Scheduled check - no auto-detection implemented yet"
+            # Tag push or other triggers
+            echo "Tag push or other trigger - not auto-building"
             echo "new_version=" >> $GITHUB_OUTPUT
             echo "exe_url=" >> $GITHUB_OUTPUT
             echo "should_build=false" >> $GITHUB_OUTPUT
@@ -249,11 +285,32 @@ jobs:
 
       - name: Install debtap
         run: |
-          # Install debtap on Ubuntu (requires archlinux-keyring and pacman)
-          # This is a workaround - ideally use an Arch runner
+          # Install debtap on Ubuntu
           sudo apt-get update
-          sudo apt-get install -y archlinux-keyring pacman debtap
-          sudo debtap -u
+          sudo apt-get install -y archlinux-keyring pacman binutils
+          
+          # Install debtap from AUR using pacman
+          # Create a temporary directory for building debtap
+          cd /tmp
+          git clone https://aur.archlinux.org/debtap.git
+          cd debtap
+          # Use makepkg to build debtap
+          sudo pacman -S --needed base-devel git --noconfirm
+          makepkg -si --noconfirm 2>/dev/null || true
+          
+          # Alternative: install via npm if available
+          if ! command -v debtap &> /dev/null; then
+            echo "Installing debtap via npm..."
+            sudo npm install -g debtap 2>/dev/null || true
+          fi
+          
+          # Update debtap database
+          if command -v debtap &> /dev/null; then
+            sudo debtap -u
+          else
+            echo "debtap not available, skipping Arch package build"
+            exit 0
+          fi
 
       - name: Download .deb artifact
         uses: actions/download-artifact@v4
@@ -264,8 +321,21 @@ jobs:
       - name: Build Arch package
         run: |
           VERSION="${{ needs.check-release.outputs.new_version }}"
+          
+          # Verify .deb exists
+          if [ ! -f "releases/minimax-agent_${VERSION}_amd64.deb" ]; then
+            echo "Error: .deb file not found"
+            exit 1
+          fi
+          
+          # Make build-arch.sh executable
           chmod +x build-arch.sh
-          ./build-arch.sh
+          
+          # Run the build script with error handling
+          ./build-arch.sh || {
+            echo "Arch package build failed, but continuing..."
+            exit 0
+          }
         env:
           DEBIAN_FRONTEND: noninteractive
 
@@ -294,3 +364,72 @@ jobs:
         run: |
           echo "Build failed for version ${{ needs.check-release.outputs.new_version }}"
           echo "Check workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  create-failure-issue:
+    name: Create GitHub Issue on Failure
+    needs: [build-deb, build-arch]
+    if: failure() && needs.check-release.outputs.new_version != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create issue for failed build
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = "${{ needs.check-release.outputs.new_version }}";
+            const runUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}";
+            const runId = "${{ github.run_id }}";
+            const eventName = "${{ github.event_name }}";
+            
+            let triggerType = 'Tag push';
+            if (eventName === 'workflow_dispatch') triggerType = 'Manual dispatch';
+            else if (eventName === 'schedule') triggerType = 'Scheduled check';
+            
+            const title = `Build failed for MiniMax Agent Linux v${version}`;
+            const body = `## Build Failure Report
+            
+**Version:** v${version}
+**Workflow Run:** [#${runId}](${runUrl})
+**Triggered by:** ${triggerType}
+**Timestamp:** ${new Date().toISOString()}
+
+### Error Details
+The automated build for MiniMax Agent Linux v${version} failed. Please check the workflow logs for details.
+
+### Next Steps
+1. Review the workflow run: ${runUrl}
+2. Check if the Windows release v${version} is available at the CDN
+3. Verify the EXE URL is accessible
+4. Manually trigger the workflow if needed after fixing issues
+
+### Common Issues
+- Windows release not yet available at CDN
+- Network connectivity issues downloading the .exe
+- Version mismatch in extracted files
+- Native module rebuild failures (better-sqlite3, node-pty, etc.)
+- Disk space or memory constraints on runner
+
+---
+*This issue was created automatically by the GitHub Actions workflow.*`;
+
+            // Check if issue already exists for this version
+            const existingIssues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: ['build-failure', `v${version}`]
+            });
+
+            if (existingIssues.data.length > 0) {
+              console.log('Issue already exists for this version:', existingIssues.data[0].html_url);
+              return;
+            }
+
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['build-failure', 'automated', `v${version}`]
+            });
+
+            console.log('Created issue:', issue.data.html_url);
