@@ -1,0 +1,296 @@
+name: Build and Release MiniMax Agent Linux
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Windows version to build (e.g., 3.0.54)'
+        required: true
+        type: string
+      exe_url:
+        description: 'Direct URL to Windows .exe (optional, auto-detected if not provided)'
+        required: false
+        type: string
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 6 AM UTC to check for new releases
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  check-release:
+    name: Check for New Windows Release
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.check.outputs.new_version }}
+      exe_url: ${{ steps.check.outputs.exe_url }}
+      should_build: ${{ steps.check.outputs.should_build }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest release version from Windows CDN
+        id: check
+        run: |
+          # Try to fetch latest version from CDN
+          # The CDN URL pattern: https://file.cdn.minimax.io/public/minimax-agent-prod/release/MiniMax%20Code%20Setup%20<VERSION>.exe
+          
+          # Get current version from repo
+          CURRENT_VERSION=$(grep 'VERSION=' build.sh | head -1 | cut -d'"' -f2)
+          echo "Current version in repo: $CURRENT_VERSION"
+          
+          # Try to find latest version by checking common version patterns
+          # We'll try to detect from the CDN directory listing or known releases
+          LATEST_VERSION=""
+          
+          # For now, if triggered manually, use the input version
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            LATEST_VERSION="${{ github.event.inputs.version }}"
+            EXE_URL="${{ github.event.inputs.exe_url }}"
+            if [ -z "$EXE_URL" ]; then
+              EXE_URL="https://file.cdn.minimax.io/public/minimax-agent-prod/release/MiniMax%20Code%20Setup%20${LATEST_VERSION}.exe"
+            fi
+            echo "Manual trigger - Version: $LATEST_VERSION"
+            echo "new_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+            echo "exe_url=$EXE_URL" >> $GITHUB_OUTPUT
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          else
+            # Scheduled check - try to detect new version
+            # This is a placeholder - you'd need a reliable way to detect new versions
+            echo "Scheduled check - no auto-detection implemented yet"
+            echo "new_version=" >> $GITHUB_OUTPUT
+            echo "exe_url=" >> $GITHUB_OUTPUT
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          fi
+
+  build-deb:
+    name: Build .deb Package
+    needs: check-release
+    if: needs.check-release.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev fakeroot p7zip-full curl unzip
+
+      - name: Install Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Download Windows release
+        id: download
+        run: |
+          VERSION="${{ needs.check-release.outputs.new_version }}"
+          EXE_URL="${{ needs.check-release.outputs.exe_url }}"
+          
+          mkdir -p /tmp/minimax-extract
+          cd /tmp/minimax-extract
+          
+          echo "Downloading from: $EXE_URL"
+          curl -fsSL -o "MiniMax Code Setup ${VERSION}.exe" "$EXE_URL"
+          
+          # Verify download
+          if [ ! -f "MiniMax Code Setup ${VERSION}.exe" ]; then
+            echo "Download failed"
+            exit 1
+          fi
+          
+          FILE_SIZE=$(stat -c%s "MiniMax Code Setup ${VERSION}.exe")
+          if [ "$FILE_SIZE" -lt 50000000 ]; then
+            echo "Downloaded file too small ($FILE_SIZE bytes)"
+            exit 1
+          fi
+          
+          echo "Downloaded successfully: $FILE_SIZE bytes"
+
+      - name: Extract NSIS installer
+        run: |
+          VERSION="${{ needs.check-release.outputs.new_version }}"
+          cd /tmp/minimax-extract
+          
+          mkdir -p extracted
+          7z x -oextracted "MiniMax Code Setup ${VERSION}.exe"
+          
+          mkdir -p app-64
+          7z x -oapp-64 extracted/\$PLUGINSDIR/app-64.7z
+
+      - name: Update version references
+        run: |
+          VERSION="${{ needs.check-release.outputs.new_version }}"
+          
+          # Update build.sh
+          sed -i "s/VERSION=\".*\"/VERSION=\"${VERSION}\"/" build.sh
+          
+          # Update setup.sh
+          sed -i "s/VERSION=\".*\"/VERSION=\"${VERSION}\"/" setup.sh
+          
+          # Update releases/download.sh
+          sed -i "s/VERSION=\".*\"/VERSION=\"${VERSION}\"/" releases/download.sh
+          sed -i "s|GITHUB_URL=.*|GITHUB_URL=\"https://github.com/unn-Known1/minimax-agent-linux/releases/download/v${VERSION}/minimax-agent_${VERSION}_amd64.deb\"|" releases/download.sh
+          
+          # Update DEBIAN/control
+          sed -i "s/Version: .*/Version: ${VERSION}/" linux-build/DEBIAN/control
+          
+          # Update daemon package.json
+          sed -i "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" linux-build/opt/minimax-agent/resources/resources/daemon/package.json
+          
+          # Update README.md
+          sed -i "s/Version-[0-9.]*\-green/Version-${VERSION}-green/" README.md
+          sed -i "s|v[0-9.]\+/minimax-agent_[0-9.]\+_amd64.deb|v${VERSION}/minimax-agent_${VERSION}_amd64.deb|g" README.md
+          sed -i "s|minimax-agent_[0-9.]\+_amd64.deb|minimax-agent_${VERSION}_amd64.deb|g" README.md
+          
+          # Update INSTALL.md
+          sed -i "s|minimax-agent_[0-9.]\+_amd64.deb|minimax-agent_${VERSION}_amd64.deb|g" INSTALL.md
+          
+          # Update CONTRIBUTING.md
+          sed -i "s|minimax-agent_[0-9.]\+_amd64.deb|minimax-agent_${VERSION}_amd64.deb|g" CONTRIBUTING.md
+
+      - name: Copy resources from Windows release
+        run: |
+          cp /tmp/minimax-extract/app-64/resources/app.asar \
+             linux-build/opt/minimax-agent/resources/app.asar
+          
+          rm -rf linux-build/opt/minimax-agent/resources/app.asar.unpacked
+          cp -r /tmp/minimax-extract/app-64/resources/app.asar.unpacked \
+                linux-build/opt/minimax-agent/resources/app.asar.unpacked
+          
+          cp /tmp/minimax-extract/app-64/resources/app-update.yml \
+             linux-build/opt/minimax-agent/resources/app-update.yml
+          
+          cp /tmp/minimax-extract/app-64/resources/resources/icon.ico \
+             linux-build/opt/minimax-agent/resources/resources/icon.ico
+          
+          cp /tmp/minimax-extract/app-64/resources/resources/tray.ico \
+             linux-build/opt/minimax-agent/resources/resources/tray.ico
+          
+          cp /tmp/minimax-extract/app-64/resources/resources/tray.png \
+             linux-build/opt/minimax-agent/resources/resources/tray.png
+          
+          cp /tmp/minimax-extract/app-64/resources/resources/trayTemplate@2x.png \
+             linux-build/opt/minimax-agent/resources/resources/trayTemplate@2x.png
+          
+          cp /tmp/minimax-extract/app-64/resources/resources/trayTemplate.png \
+             linux-build/opt/minimax-agent/resources/resources/trayTemplate.png
+
+      - name: Build .deb package
+        run: |
+          sudo ./build.sh
+
+      - name: Verify package
+        run: |
+          VERSION="${{ needs.check-release.outputs.new_version }}"
+          dpkg-deb -I output/minimax-agent_${VERSION}_amd64.deb
+          dpkg-deb -c output/minimax-agent_${VERSION}_amd64.deb | head -20
+
+      - name: Copy to releases folder
+        run: |
+          VERSION="${{ needs.check-release.outputs.new_version }}"
+          cp output/minimax-agent_${VERSION}_amd64.deb releases/
+
+      - name: Commit version changes
+        run: |
+          VERSION="${{ needs.check-release.outputs.new_version }}"
+          git add -A
+          git commit -m "Release v${VERSION}" || echo "No changes to commit"
+          git tag -a "v${VERSION}" -m "Release v${VERSION}" || echo "Tag already exists"
+
+      - name: Push changes and tags
+        run: |
+          git push origin main --tags
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.check-release.outputs.new_version }}
+          name: v${{ needs.check-release.outputs.new_version }}
+          body: "Release v${{ needs.check-release.outputs.new_version }} - Updated from Windows ${{ needs.check-release.outputs.new_version }}"
+          files: |
+            releases/minimax-agent_${{ needs.check-release.outputs.new_version }}_amd64.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload .deb as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: minimax-agent-deb
+          path: output/minimax-agent_${{ needs.check-release.outputs.new_version }}_amd64.deb
+
+  build-arch:
+    name: Build Arch Package
+    needs: build-deb
+    if: needs.build-deb.result == 'success'
+    runs-on: ubuntu-latest
+    # Note: This runs on Ubuntu with debtap. For native Arch build, use an Arch runner
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install debtap
+        run: |
+          # Install debtap on Ubuntu (requires archlinux-keyring and pacman)
+          # This is a workaround - ideally use an Arch runner
+          sudo apt-get update
+          sudo apt-get install -y archlinux-keyring pacman debtap
+          sudo debtap -u
+
+      - name: Download .deb artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: minimax-agent-deb
+          path: releases/
+
+      - name: Build Arch package
+        run: |
+          VERSION="${{ needs.check-release.outputs.new_version }}"
+          chmod +x build-arch.sh
+          ./build-arch.sh
+        env:
+          DEBIAN_FRONTEND: noninteractive
+
+      - name: Upload Arch package to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.check-release.outputs.new_version }}
+          files: |
+            releases/minimax-agent-${{ needs.check-release.outputs.new_version }}-1-x86_64.pkg.tar.zst
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Arch package as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: minimax-agent-arch
+          path: releases/minimax-agent-${{ needs.check-release.outputs.new_version }}-1-x86_64.pkg.tar.zst
+
+  notify:
+    name: Notify on Failure
+    needs: [build-deb, build-arch]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send failure notification
+        run: |
+          echo "Build failed for version ${{ needs.check-release.outputs.new_version }}"
+          echo "Check workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
