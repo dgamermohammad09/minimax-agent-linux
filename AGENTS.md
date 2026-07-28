@@ -155,6 +155,34 @@ The following native modules are bundled in `app.asar.unpacked`:
 
 The build targets Electron `v33.2.0`. The `setup.sh` script downloads this runtime during installation.
 
+## Arch Linux Package
+
+Build an Arch Linux package (`.pkg.tar.zst`) from the `.deb` using `debtap`:
+
+**Prerequisites:** Arch Linux system (or Arch container/VM) with `debtap` and `pacman`
+
+```bash
+# Install debtap
+sudo pacman -S debtap
+sudo debtap -u
+
+# Build Arch package from .deb (run on Arch Linux)
+cd /path/to/minimax-agent-linux
+./build-arch.sh
+```
+
+The script creates `releases/minimax-agent-<VERSION>-1-x86_64.pkg.tar.zst`
+
+**Include in GitHub Release:**
+```bash
+gh release upload v<VERSION> releases/minimax-agent-<VERSION>-1-x86_64.pkg.tar.zst
+```
+
+**Arch users install with:**
+```bash
+sudo pacman -U minimax-agent-<VERSION>-1-x86_64.pkg.tar.zst
+```
+
 ## Troubleshooting
 
 ### Build fails with missing tools
