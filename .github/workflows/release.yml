@@ -11,104 +11,14 @@ on:
         description: 'Direct URL to Windows .exe (optional, auto-detected if not provided)'
         required: false
         type: string
-  schedule:
-    - cron: '0 6 * * *'  # Daily at 6 AM UTC to check for new releases
-  push:
-    tags:
-      - 'v*'
 
 permissions:
   contents: write
   packages: write
 
 jobs:
-  check-release:
-    name: Check for New Windows Release
-    runs-on: ubuntu-latest
-    outputs:
-      new_version: ${{ steps.check.outputs.new_version }}
-      exe_url: ${{ steps.check.outputs.exe_url }}
-      should_build: ${{ steps.check.outputs.should_build }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Get latest release version from Windows CDN
-        id: check
-        run: |
-          # Try to fetch latest version from CDN
-          # The CDN URL pattern: https://file.cdn.minimax.io/public/minimax-agent-prod/release/MiniMax%20Code%20Setup%20<VERSION>.exe
-          
-          # Get current version from repo
-          CURRENT_VERSION=$(grep 'VERSION=' build.sh | head -1 | cut -d'"' -f2)
-          echo "Current version in repo: $CURRENT_VERSION"
-          
-          # Try to find latest version by checking common version patterns
-          # We'll try to detect from the CDN directory listing or known releases
-          LATEST_VERSION=""
-          
-          # For now, if triggered manually, use the input version
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            LATEST_VERSION="${{ github.event.inputs.version }}"
-            EXE_URL="${{ github.event.inputs.exe_url }}"
-            if [ -z "$EXE_URL" ]; then
-              EXE_URL="https://file.cdn.minimax.io/public/minimax-agent-prod/release/MiniMax%20Code%20Setup%20${LATEST_VERSION}.exe"
-            fi
-            echo "Manual trigger - Version: $LATEST_VERSION"
-            echo "new_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
-            echo "exe_url=$EXE_URL" >> $GITHUB_OUTPUT
-            echo "should_build=true" >> $GITHUB_OUTPUT
-          elif [ "${{ github.event_name }}" = "schedule" ]; then
-            # Scheduled check - try to detect new version by checking CDN
-            # Try to fetch directory listing or check known version patterns
-            echo "Scheduled check - attempting to detect new version..."
-            
-            # Try to get latest version from CDN (this is a best-effort approach)
-            # We'll check a few likely version increments
-            for i in {1..10}; do
-              TEST_VERSION=$(echo $CURRENT_VERSION | awk -F. -v inc=$i '{print $1"."$2"."$3+inc}')
-              TEST_URL="https://file.cdn.minimax.io/public/minimax-agent-prod/release/MiniMax%20Code%20Setup%20${TEST_VERSION}.exe"
-              
-              echo "Checking version: $TEST_VERSION"
-              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --head "$TEST_URL" --max-time 10 || echo "000")
-              
-              if [ "$HTTP_CODE" = "200" ]; then
-                echo "Found new version: $TEST_VERSION"
-                LATEST_VERSION=$TEST_VERSION
-                EXE_URL=$TEST_URL
-                break
-              elif [ "$HTTP_CODE" = "404" ]; then
-                echo "Version $TEST_VERSION not found (404)"
-              else
-                echo "Version $TEST_VERSION check failed (HTTP $HTTP_CODE)"
-              fi
-            done
-            
-            if [ -n "$LATEST_VERSION" ]; then
-              echo "new_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
-              echo "exe_url=$EXE_URL" >> $GITHUB_OUTPUT
-              echo "should_build=true" >> $GITHUB_OUTPUT
-              echo "New version detected: $LATEST_VERSION"
-            else
-              echo "No new version found"
-              echo "new_version=" >> $GITHUB_OUTPUT
-              echo "exe_url=" >> $GITHUB_OUTPUT
-              echo "should_build=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            # Tag push or other triggers
-            echo "Tag push or other trigger - not auto-building"
-            echo "new_version=" >> $GITHUB_OUTPUT
-            echo "exe_url=" >> $GITHUB_OUTPUT
-            echo "should_build=false" >> $GITHUB_OUTPUT
-          fi
-
   build-deb:
     name: Build .deb Package
-    needs: check-release
-    if: needs.check-release.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -134,22 +44,18 @@ jobs:
           cache: 'npm'
 
       - name: Download Windows release
-        id: download
         run: |
-          VERSION="${{ needs.check-release.outputs.new_version }}"
-          EXE_URL="${{ needs.check-release.outputs.exe_url }}"
+          VERSION="${{ github.event.inputs.version }}"
+          EXE_URL="${{ github.event.inputs.exe_url }}"
+          if [ -z "$EXE_URL" ]; then
+            EXE_URL="https://file.cdn.minimax.io/public/minimax-agent-prod/release/MiniMax%20Code%20Setup%20${VERSION}.exe"
+          fi
           
           mkdir -p /tmp/minimax-extract
           cd /tmp/minimax-extract
           
           echo "Downloading from: $EXE_URL"
           curl -fsSL -o "MiniMax Code Setup ${VERSION}.exe" "$EXE_URL"
-          
-          # Verify download
-          if [ ! -f "MiniMax Code Setup ${VERSION}.exe" ]; then
-            echo "Download failed"
-            exit 1
-          fi
           
           FILE_SIZE=$(stat -c%s "MiniMax Code Setup ${VERSION}.exe")
           if [ "$FILE_SIZE" -lt 50000000 ]; then
@@ -161,44 +67,26 @@ jobs:
 
       - name: Extract NSIS installer
         run: |
-          VERSION="${{ needs.check-release.outputs.new_version }}"
+          VERSION="${{ github.event.inputs.version }}"
           cd /tmp/minimax-extract
-          
           mkdir -p extracted
           7z x -oextracted "MiniMax Code Setup ${VERSION}.exe"
-          
           mkdir -p app-64
           7z x -oapp-64 extracted/\$PLUGINSDIR/app-64.7z
 
       - name: Update version references
         run: |
-          VERSION="${{ needs.check-release.outputs.new_version }}"
-          
-          # Update build.sh
+          VERSION="${{ github.event.inputs.version }}"
           sed -i "s/VERSION=\".*\"/VERSION=\"${VERSION}\"/" build.sh
-          
-          # Update setup.sh
           sed -i "s/VERSION=\".*\"/VERSION=\"${VERSION}\"/" setup.sh
-          
-          # Update releases/download.sh
           sed -i "s/VERSION=\".*\"/VERSION=\"${VERSION}\"/" releases/download.sh
           sed -i "s|GITHUB_URL=.*|GITHUB_URL=\"https://github.com/unn-Known1/minimax-agent-linux/releases/download/v${VERSION}/minimax-agent_${VERSION}_amd64.deb\"|" releases/download.sh
-          
-          # Update DEBIAN/control
           sed -i "s/Version: .*/Version: ${VERSION}/" linux-build/DEBIAN/control
-          
-          # Update daemon package.json
           sed -i "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" linux-build/opt/minimax-agent/resources/resources/daemon/package.json
-          
-          # Update README.md
           sed -i "s/Version-[0-9.]*\-green/Version-${VERSION}-green/" README.md
           sed -i "s|v[0-9.]\+/minimax-agent_[0-9.]\+_amd64.deb|v${VERSION}/minimax-agent_${VERSION}_amd64.deb|g" README.md
           sed -i "s|minimax-agent_[0-9.]\+_amd64.deb|minimax-agent_${VERSION}_amd64.deb|g" README.md
-          
-          # Update INSTALL.md
           sed -i "s|minimax-agent_[0-9.]\+_amd64.deb|minimax-agent_${VERSION}_amd64.deb|g" INSTALL.md
-          
-          # Update CONTRIBUTING.md
           sed -i "s|minimax-agent_[0-9.]\+_amd64.deb|minimax-agent_${VERSION}_amd64.deb|g" CONTRIBUTING.md
 
       - name: Copy resources from Windows release
@@ -229,167 +117,67 @@ jobs:
              linux-build/opt/minimax-agent/resources/resources/trayTemplate.png
 
       - name: Build .deb package
-        run: |
-          sudo ./build.sh
+        run: sudo ./build.sh
 
       - name: Verify package
         run: |
-          VERSION="${{ needs.check-release.outputs.new_version }}"
+          VERSION="${{ github.event.inputs.version }}"
           dpkg-deb -I output/minimax-agent_${VERSION}_amd64.deb
           dpkg-deb -c output/minimax-agent_${VERSION}_amd64.deb | head -20
 
       - name: Copy to releases folder
         run: |
-          VERSION="${{ needs.check-release.outputs.new_version }}"
+          VERSION="${{ github.event.inputs.version }}"
           cp output/minimax-agent_${VERSION}_amd64.deb releases/
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: minimax-agent-deb
+          path: output/minimax-agent_${{ github.event.inputs.version }}_amd64.deb
 
       - name: Commit version changes
         run: |
-          VERSION="${{ needs.check-release.outputs.new_version }}"
+          VERSION="${{ github.event.inputs.version }}"
           git add -A
           git commit -m "Release v${VERSION}" || echo "No changes to commit"
           git tag -a "v${VERSION}" -m "Release v${VERSION}" || echo "Tag already exists"
 
       - name: Push changes and tags
-        run: |
-          git push origin main --tags
+        run: git push origin main --tags
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ needs.check-release.outputs.new_version }}
-          name: v${{ needs.check-release.outputs.new_version }}
-          body: "Release v${{ needs.check-release.outputs.new_version }} - Updated from Windows ${{ needs.check-release.outputs.new_version }}"
+          tag_name: v${{ github.event.inputs.version }}
+          name: v${{ github.event.inputs.version }}
+          body: "Release v${{ github.event.inputs.version }} - Updated from Windows ${{ github.event.inputs.version }}"
           files: |
-            releases/minimax-agent_${{ needs.check-release.outputs.new_version }}_amd64.deb
+            releases/minimax-agent_${{ github.event.inputs.version }}_amd64.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload .deb as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: minimax-agent-deb
-          path: output/minimax-agent_${{ needs.check-release.outputs.new_version }}_amd64.deb
-
-  build-arch:
-    name: Build Arch Package
-    needs: build-deb
-    if: needs.build-deb.result == 'success'
-    runs-on: ubuntu-latest
-    # Note: This runs on Ubuntu with debtap. For native Arch build, use an Arch runner
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install debtap
-        run: |
-          # Install debtap on Ubuntu
-          sudo apt-get update
-          sudo apt-get install -y archlinux-keyring pacman binutils
-          
-          # Install debtap from AUR using pacman
-          # Create a temporary directory for building debtap
-          cd /tmp
-          git clone https://aur.archlinux.org/debtap.git
-          cd debtap
-          # Use makepkg to build debtap
-          sudo pacman -S --needed base-devel git --noconfirm
-          makepkg -si --noconfirm 2>/dev/null || true
-          
-          # Alternative: install via npm if available
-          if ! command -v debtap &> /dev/null; then
-            echo "Installing debtap via npm..."
-            sudo npm install -g debtap 2>/dev/null || true
-          fi
-          
-          # Update debtap database
-          if command -v debtap &> /dev/null; then
-            sudo debtap -u
-          else
-            echo "debtap not available, skipping Arch package build"
-            exit 0
-          fi
-
-      - name: Download .deb artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: minimax-agent-deb
-          path: releases/
-
-      - name: Build Arch package
-        run: |
-          VERSION="${{ needs.check-release.outputs.new_version }}"
-          
-          # Verify .deb exists
-          if [ ! -f "releases/minimax-agent_${VERSION}_amd64.deb" ]; then
-            echo "Error: .deb file not found"
-            exit 1
-          fi
-          
-          # Make build-arch.sh executable
-          chmod +x build-arch.sh
-          
-          # Run the build script with error handling
-          ./build-arch.sh || {
-            echo "Arch package build failed, but continuing..."
-            exit 0
-          }
-        env:
-          DEBIAN_FRONTEND: noninteractive
-
-      - name: Upload Arch package to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.check-release.outputs.new_version }}
-          files: |
-            releases/minimax-agent-${{ needs.check-release.outputs.new_version }}-1-x86_64.pkg.tar.zst
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Arch package as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: minimax-agent-arch
-          path: releases/minimax-agent-${{ needs.check-release.outputs.new_version }}-1-x86_64.pkg.tar.zst
-
-  notify:
-    name: Notify on Failure
-    needs: [build-deb, build-arch]
+  notify-failure:
+    name: Create Failure Issue
     if: failure()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Send failure notification
-        run: |
-          echo "Build failed for version ${{ needs.check-release.outputs.new_version }}"
-          echo "Check workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-
-  create-failure-issue:
-    name: Create GitHub Issue on Failure
-    needs: [build-deb, build-arch]
-    if: failure() && needs.check-release.outputs.new_version != ''
     runs-on: ubuntu-latest
     steps:
       - name: Create issue for failed build
         uses: actions/github-script@v7
         with:
           script: |
-            const version = "${{ needs.check-release.outputs.new_version }}";
+            const version = "${{ github.event.inputs.version }}";
             const runUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}";
             const runId = "${{ github.run_id }}";
-            const eventName = "${{ github.event_name }}";
-            
-            let triggerType = 'Tag push';
-            if (eventName === 'workflow_dispatch') triggerType = 'Manual dispatch';
-            else if (eventName === 'schedule') triggerType = 'Scheduled check';
             
             const title = `Build failed for MiniMax Agent Linux v${version}`;
             const body = `## Build Failure Report
             
 **Version:** v${version}
 **Workflow Run:** [#${runId}](${runUrl})
-**Triggered by:** ${triggerType}
+**Triggered by:** Manual dispatch
 **Timestamp:** ${new Date().toISOString()}
 
 ### Error Details
@@ -409,14 +197,13 @@ The automated build for MiniMax Agent Linux v${version} failed. Please check the
 - Disk space or memory constraints on runner
 
 ---
-*This issue was created automatically by the GitHub Actions workflow.*`;
+*This issue was created automatically by the GitHub Actions workflow.`;
 
-            // Check if issue already exists for this version
             const existingIssues = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
-              labels: ['build-failure', `v${version}`]
+              labels: ['build-failure', 'automated', \`v${version}\`]
             });
 
             if (existingIssues.data.length > 0) {
@@ -429,7 +216,7 @@ The automated build for MiniMax Agent Linux v${version} failed. Please check the
               repo: context.repo.repo,
               title: title,
               body: body,
-              labels: ['build-failure', 'automated', `v${version}`]
+              labels: ['build-failure', 'automated', \`v${version}\`]
             });
 
             console.log('Created issue:', issue.data.html_url);
