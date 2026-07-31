@@ -4,7 +4,7 @@
 
 set -e
 
-VERSION="3.0.54"
+VERSION="3.0.57"
 DEB_FILE="minimax-agent_${VERSION}_amd64.deb"
 ARCH_PKG="minimax-agent-${VERSION}-1-x86_64.pkg.tar.zst"
 
