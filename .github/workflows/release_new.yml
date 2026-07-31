@@ -308,4 +308,4 @@ The automated build for MiniMax Agent Linux v${version} failed. Please check the
               labels: ['build-failure', 'automated', \`v${version}\`]
             });
 
-            console.log('Created issue:', issue.data.html_url);
+            console.log('Created issue:', issue.data.html_url);# force re-registration
