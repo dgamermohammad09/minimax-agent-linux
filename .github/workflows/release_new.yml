@@ -263,30 +263,30 @@ jobs:
             
             const title = `Build failed for MiniMax Agent Linux v${version}`;
             const body = `## Build Failure Report
-            
-**Version:** v${version}
-**Workflow Run:** [#${runId}](${runUrl})
-**Triggered by:** ${triggerType}
-**Timestamp:** ${new Date().toISOString()}
 
-### Error Details
-The automated build for MiniMax Agent Linux v${version} failed. Please check the workflow logs for details.
+            **Version:** v${version}
+            **Workflow Run:** [#${runId}](${runUrl})
+            **Triggered by:** ${triggerType}
+            **Timestamp:** ${new Date().toISOString()}
 
-### Next Steps
-1. Review the workflow run: ${runUrl}
-2. Check if the Windows release v${version} is available at the CDN
-3. Verify the EXE URL is accessible
-4. Manually trigger the workflow if needed after fixing issues
+            ### Error Details
+            The automated build for MiniMax Agent Linux v${version} failed. Please check the workflow logs for details.
 
-### Common Issues
-- Windows release not yet available at CDN
-- Network connectivity issues downloading the .exe
-- Version mismatch in extracted files
-- Native module rebuild failures (better-sqlite3, node-pty, etc.)
-- Disk space or memory constraints on runner
+            ### Next Steps
+            1. Review the workflow run: ${runUrl}
+            2. Check if the Windows release v${version} is available at the CDN
+            3. Verify the EXE URL is accessible
+            4. Manually trigger the workflow if needed after fixing issues
 
----
-*This issue was created automatically by the GitHub Actions workflow.`;
+            ### Common Issues
+            - Windows release not yet available at CDN
+            - Network connectivity issues downloading the .exe
+            - Version mismatch in extracted files
+            - Native module rebuild failures (better-sqlite3, node-pty, etc.)
+            - Disk space or memory constraints on runner
+
+            ---
+            *This issue was created automatically by the GitHub Actions workflow.`.trimStart().replace(/^            /gm, '');
 
             const existingIssues = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
