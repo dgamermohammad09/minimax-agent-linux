@@ -4,9 +4,9 @@
 
 set -e
 
-VERSION="3.0.60"
+VERSION="3.0.63"
 DEB_FILE="minimax-agent_${VERSION}_amd64.deb"
-GITHUB_URL="https://github.com/unn-Known1/minimax-agent-linux/releases/download/v3.0.60/minimax-agent_3.0.60_amd64.deb"
+GITHUB_URL="https://github.com/unn-Known1/minimax-agent-linux/releases/download/v3.0.63/minimax-agent_3.0.63_amd64.deb"
 
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then
