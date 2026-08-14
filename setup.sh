@@ -4,8 +4,8 @@
 
 set -e
 
-VERSION="3.0.63"
-ELECTRON_VERSION="3.0.63"
+VERSION="3.0.65"
+ELECTRON_VERSION="3.0.65"
 ELECTRON_URL="https://github.com/electron/electron/releases/download/${ELECTRON_VERSION}/electron-${ELECTRON_VERSION}-linux-x64.zip"
 
 echo "=========================================="
