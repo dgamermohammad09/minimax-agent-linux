@@ -151,6 +151,9 @@ if [ ! -d "$ASAR_UNPACKED_DST" ]; then
     if [ -d "$ASAR_UNPACKED_SRC" ]; then
         echo "  Copying app.asar.unpacked from Windows release..."
         cp -r "$ASAR_UNPACKED_SRC" "$ASAR_UNPACKED_DST"
+
+    echo '[3.5/6] Back-filling platform binaries (if needed)...'
+    backfill_platform_binaries "$ASAR_UNPACKED_DST" || true
     else
         echo "  WARNING: app.asar.unpacked not found at $ASAR_UNPACKED_SRC"
     fi
