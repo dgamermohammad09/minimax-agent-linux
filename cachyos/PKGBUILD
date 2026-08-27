@@ -168,19 +168,41 @@ package() {
         echo "Installed app.asar.unpacked"
     fi
 
+
+# Last-resort fallback: create a fake @vscode/ripgrep-linux-x64 npm package
+# that points at the system ripgrep. The upstream .deb may ship without
+# the platform binary; if so, the @vscode/ripgrep wrapper's `require()`
+# call would fail with a bare symlink. We need a real package structure.
+stage_ripgrep_fallback_pkg() {
+    local target_dir="$1"
+    [ -d "$target_dir" ] || return 0
+    if [ -f "$target_dir/bin/rg" ] && [ -f "$target_dir/package.json" ]; then return 0; fi
+    if [ ! -x /usr/bin/rg ]; then return 0; fi
+    install -dm755 "$target_dir/bin"
+    ln -sf /usr/bin/rg "$target_dir/bin/rg"
+    cat > "$target_dir/package.json" <<'PKGJSON'
+{
+  "name": "@vscode/ripgrep-linux-x64",
+  "version": "1.0.0-system-rg",
+  "main": "index.js",
+  "bin": { "rg": "bin/rg" }
+}
+PKGJSON
+    cat > "$target_dir/index.js" <<'IDXJS'
+const path = require("path");
+const rgPath = path.join(__dirname, "bin", "rg");
+module.exports = { path: rgPath };
+module.exports.default = module.exports;
+IDXJS
+}
+
     # Last-resort fallback: if the unpacked dir still lacks the
     # ripgrep-linux-x64 binary (e.g. the .deb didn'\''t have it AND
     # prepare() couldn'\''t reach npm), symlink to the system ripgrep.
     # This makes the package usable on Cachy OS even if upstream ships
     # a broken .deb.
     if [ ! -e "${pkgdir}/opt/minimax-agent/resources/app.asar.unpacked/node_modules/@vscode/ripgrep-linux-x64/bin/rg" ]; then
-        if [ ! -d "${pkgdir}/opt/minimax-agent/resources/app.asar.unpacked/node_modules/@vscode/ripgrep-linux-x64/bin" ]; then
-            install -dm755 "${pkgdir}/opt/minimax-agent/resources/app.asar.unpacked/node_modules/@vscode/ripgrep-linux-x64/bin"
-        fi
-        if [ -x /usr/bin/rg ]; then
-            ln -sf /usr/bin/rg "${pkgdir}/opt/minimax-agent/resources/app.asar.unpacked/node_modules/@vscode/ripgrep-linux-x64/bin/rg"
-            echo "Linked system ripgrep as fallback"
-        fi
+        stage_ripgrep_fallback_pkg "${pkgdir}/opt/minimax-agent/resources/app.asar.unpacked/node_modules/@vscode/ripgrep-linux-x64" || true
     fi
 
     install -dm755 "${pkgdir}/opt/minimax-agent/resources/resources/daemon/agents"
