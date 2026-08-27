@@ -26,6 +26,33 @@ if [ -z "${PACMAN_USER}" ]; then
     PACMAN_USER="$(logname 2>/dev/null || true)"
 fi
 
+
+# Backfill @vscode/ripgrep-linux-x64 if missing. Catches installs from
+# pre-built .pkg.tar.zst files where the backfill did not run at build time
+# (e.g. someone built on a host without npm).
+ASAR_UNPACKED="/opt/minimax-agent/resources/app.asar.unpacked"
+if [ -d "$ASAR_UNPACKED" ] && [ ! -d "$ASAR_UNPACKED/node_modules/@vscode/ripgrep-linux-x64" ]; then
+    echo "minimax-agent: Back-filling @vscode/ripgrep-linux-x64..."
+    BACKFILL_STAGE="/tmp/minimax-backfill.$$"
+    mkdir -p "$BACKFILL_STAGE"
+    (
+        cd "$BACKFILL_STAGE"
+        printf '{\n  "name": "minimax-backfill",\n  "version": "1.0.0",\n  "private": true,\n  "dependencies": { "@vscode/ripgrep": "*" }\n}\n' > package.json
+        if command -v npm >/dev/null 2>&1; then
+            if npm install --no-audit --no-fund --omit=dev 2>/dev/null; then
+                mkdir -p "$ASAR_UNPACKED/node_modules/@vscode"
+                cp -a node_modules/@vscode/ripgrep-linux-x64 "$ASAR_UNPACKED/node_modules/@vscode/"
+                echo "minimax-agent: Back-filled @vscode/ripgrep-linux-x64 from npm"
+            fi
+        fi
+    )
+    if [ ! -d "$ASAR_UNPACKED/node_modules/@vscode/ripgrep-linux-x64/bin" ] && command -v rg >/dev/null 2>&1; then
+        mkdir -p "$ASAR_UNPACKED/node_modules/@vscode/ripgrep-linux-x64/bin"
+        ln -sf "$(command -v rg)" "$ASAR_UNPACKED/node_modules/@vscode/ripgrep-linux-x64/bin/rg"
+        echo "minimax-agent: Linked system ripgrep as fallback"
+    fi
+    unset BACKFILL_STAGE
+fi
 # ─────────────────────────── helpers ───────────────────────────
 _log() { echo "minimax-agent: $*"; }
 
